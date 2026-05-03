@@ -24,11 +24,16 @@ AUDIT DATE: ${auditDate}
 OVERVIEW TEXT (main panel):
 ${raw.overviewText || '(empty)'}
 
+HOURS (expanded weekly schedule — extracted separately after clicking the hours toggle):
+${raw.hoursText || '(not captured — only partial hours may appear in overview text)'}
+
 REVIEWS TAB TEXT:
 ${raw.reviewsText ? raw.reviewsText.substring(0, 2000) : '(empty)'}
 
 ABOUT TAB TEXT:
 ${raw.aboutText ? raw.aboutText.substring(0, 2000) : '(empty)'}
+
+NOTE ON ADDRESS: If no street address appears, this may be a service-area business (SAB) that intentionally hides its physical address. Look for "Service area:" text in the overview. If a service area is listed, treat that as the location field. Only flag address as missing if neither a street address nor a service area is shown.
 
 ---
 
