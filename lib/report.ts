@@ -1,8 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { GMBData } from './scraper';
 
-const client = new Anthropic();
-
 export interface Scores {
   basicInfo: number;
   reviewProfile: number;
@@ -74,6 +72,10 @@ export function computeScores(data: GMBData): Scores {
 }
 
 export async function generateReport(data: GMBData, scores: Scores): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set in your .env file.');
+  const client = new Anthropic({ apiKey });
+
   const auditDate = new Date().toLocaleDateString('en-US', {
     year: 'numeric', month: 'long', day: 'numeric',
   });
