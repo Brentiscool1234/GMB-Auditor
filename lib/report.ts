@@ -1,77 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { GMBData } from './scraper';
+import { GMBRawData } from './scraper';
 
-export interface Scores {
-  basicInfo: number;
-  reviewProfile: number;
-  engagement: number;
-  profileCompleteness: number;
-  overall: number;
-}
-
-export function computeScores(data: GMBData): Scores {
-  // Basic info: name, category, address, phone, website, hours
-  let basicInfo = 0;
-  if (data.name) basicInfo += 20;
-  if (data.category) basicInfo += 15;
-  if (data.address) basicInfo += 20;
-  if (data.phone) basicInfo += 15;
-  if (data.website) basicInfo += 15;
-  if (data.hours) basicInfo += 15;
-
-  // Review profile: rating, count, owner responses
-  let reviewProfile = 0;
-  const rating = parseFloat(data.rating) || 0;
-  const reviewCount = parseInt(data.reviewCount) || 0;
-  if (rating >= 4.5) reviewProfile += 50;
-  else if (rating >= 4.0) reviewProfile += 38;
-  else if (rating >= 3.5) reviewProfile += 25;
-  else if (rating > 0) reviewProfile += 10;
-  if (reviewCount >= 100) reviewProfile += 30;
-  else if (reviewCount >= 50) reviewProfile += 22;
-  else if (reviewCount >= 20) reviewProfile += 15;
-  else if (reviewCount >= 5) reviewProfile += 8;
-  if (data.hasOwnerResponses) reviewProfile += 20;
-  reviewProfile = Math.min(reviewProfile, 100);
-
-  // Engagement: photos, posts, Q&A
-  let engagement = 0;
-  const photos = parseInt(data.photoCount) || 0;
-  const posts = parseInt(data.recentPostCount) || 0;
-  const qa = parseInt(data.qaCount) || 0;
-  if (photos >= 50) engagement += 50;
-  else if (photos >= 20) engagement += 35;
-  else if (photos >= 10) engagement += 22;
-  else if (photos >= 3) engagement += 12;
-  if (posts >= 4) engagement += 30;
-  else if (posts >= 2) engagement += 20;
-  else if (posts >= 1) engagement += 10;
-  if (qa >= 5) engagement += 20;
-  else if (qa >= 1) engagement += 10;
-  engagement = Math.min(engagement, 100);
-
-  // Profile completeness: all fields + description + attributes
-  let profileCompleteness = 0;
-  if (data.name) profileCompleteness += 12;
-  if (data.category) profileCompleteness += 10;
-  if (data.address) profileCompleteness += 12;
-  if (data.phone) profileCompleteness += 10;
-  if (data.website) profileCompleteness += 10;
-  if (data.hours) profileCompleteness += 10;
-  if (data.description) profileCompleteness += 18;
-  if (data.attributes.length >= 5) profileCompleteness += 10;
-  else if (data.attributes.length >= 1) profileCompleteness += 5;
-  if (parseInt(data.photoCount) >= 5) profileCompleteness += 8;
-  if (data.plusCode) profileCompleteness += 5;  // indicates verified/complete listing
-  if (data.hasOwnerResponses) profileCompleteness += 5;
-  profileCompleteness = Math.min(profileCompleteness, 100);
-
-  const overall = Math.round((basicInfo + reviewProfile + engagement + profileCompleteness) / 4);
-
-  return { basicInfo, reviewProfile, engagement, profileCompleteness, overall };
-}
-
-export async function generateReport(data: GMBData, scores: Scores): Promise<string> {
+export async function generateReport(raw: GMBRawData): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set in your .env file.');
   const client = new Anthropic({ apiKey });
@@ -80,73 +10,74 @@ export async function generateReport(data: GMBData, scores: Scores): Promise<str
     year: 'numeric', month: 'long', day: 'numeric',
   });
 
-  const prompt = `You are a Google My Business (GMB) / Google Business Profile optimization expert. Analyze the data below and generate a professional HTML audit report with inline CSS — a complete HTML document ready to display in a browser.
+  const prompt = `You are a Google Business Profile (GBP / GMB) optimization expert. Below is raw text scraped from a Google Maps business listing page. Your job is to:
+
+1. Extract all available business data from the raw text
+2. Score the listing across 4 categories (0–100 each)
+3. Generate a professional HTML audit report
 
 ---
-LISTING DATA
-Business Name: ${data.name || 'Not found'}
-Category: ${data.category || 'Not set'}
-Rating: ${data.rating || 'N/A'} stars
-Review Count: ${data.reviewCount || '0'}
-Address: ${data.address || 'Not set'}
-Phone: ${data.phone || 'Not set'}
-Website: ${data.website || 'Not set'}
-Hours listed: ${data.hours ? 'Yes' : 'No'}
-Current status: ${data.isOpen || 'Unknown'}
-Description / About: ${data.description ? `"${data.description.substring(0, 300)}..."` : 'NOT SET'}
-Photo Count: ${data.photoCount || '0'}
-Recent Posts/Updates: ${data.recentPostCount || '0'}
-Q&A entries: ${data.qaCount || '0'}
-Owner responds to reviews: ${data.hasOwnerResponses ? 'Yes' : 'No / not detected'}
-Attributes listed: ${data.attributes.length > 0 ? data.attributes.slice(0, 15).join(', ') : 'None'}
-Plus Code: ${data.plusCode || 'Not found'}
-Profile URL: ${data.url}
-Audit Date: ${auditDate}
+PROFILE URL: ${raw.url}
+PAGE TITLE: ${raw.pageTitle}
+AUDIT DATE: ${auditDate}
 
----
-CALCULATED SCORES
-Basic Info Score: ${scores.basicInfo}/100
-Review Profile Score: ${scores.reviewProfile}/100
-Engagement Score: ${scores.engagement}/100
-Profile Completeness Score: ${scores.profileCompleteness}/100
-OVERALL SCORE: ${scores.overall}/100
+OVERVIEW TEXT (main panel):
+${raw.overviewText || '(empty)'}
+
+REVIEWS TAB TEXT:
+${raw.reviewsText ? raw.reviewsText.substring(0, 2000) : '(empty)'}
+
+ABOUT TAB TEXT:
+${raw.aboutText ? raw.aboutText.substring(0, 2000) : '(empty)'}
 
 ---
 
-Generate a complete HTML document with:
+SCORING RUBRIC (score each 0–100 based strictly on what you can confirm from the text above):
 
-1. **Header** — business name, overall score (large, color-coded: green ≥80, amber 60-79, red <60), audit date, and a one-line verdict
-2. **Score Cards row** — 4 cards for the category scores, same color-coding
-3. **Executive Summary** — 3–4 sentences describing the overall health of the listing
-4. **Detailed Analysis** — one section per category with specific findings (what's present, what's missing, benchmark comparisons)
-5. **Top 5 Priority Actions** — numbered list, highest-impact fixes first, each with a specific how-to step
-6. **What's Working Well** — bullet list of genuine positives
+**Basic Info** — 20pts: business name present | 20pts: address present | 20pts: phone present | 20pts: website present | 20pts: hours listed
+**Review Profile** — 50pts: rating quality (4.5+=50, 4.0+=38, 3.5+=25, >0=10, missing=0) | 30pts: review count (100+=30, 50+=22, 20+=15, 5+=8, 0=0) | 20pts: owner responds to reviews
+**Engagement** — 50pts: photo count (50+=50, 20+=35, 10+=22, 3+=12, 0=0) | 30pts: recent posts/updates (4+=30, 2+=20, 1+=10, 0=0) | 20pts: Q&A entries (5+=20, 1+=10, 0=0)
+**Profile Completeness** — 15pts: description/about text | 10pts: business category | 10pts: attributes/amenities listed | 10pts: address | 10pts: phone | 10pts: website | 10pts: hours | 10pts: photos present | 5pts: plus code (indicates verified)
+
+Overall = average of the 4 scores.
+
+---
+
+Generate a complete HTML document. Requirements:
+- Start immediately with <!DOCTYPE html> — no text before it
+- All CSS in a <style> block in <head> (no inline styles)
+- Font: system-ui, -apple-system, sans-serif
+- Max-width 860px centered, white background
+- Color palette: blue #1a73e8, green #34a853, amber #f9ab00, red #ea4335, dark #202124
+- Score badges: large circle, color-coded (green ≥80, amber 60–79, red <60)
+
+REPORT STRUCTURE:
+1. **Header** — business name (large), overall score badge, one-line verdict, audit date + URL
+2. **Four score cards** in a 2×2 grid — category name, score badge, 1-sentence summary each
+3. **Executive Summary** — 3–4 sentences on overall listing health
+4. **Detailed Analysis** — one subsection per category:
+   - What was found (list the actual values you extracted)
+   - What is missing
+   - How it compares to a well-optimised profile
+5. **Top 5 Priority Actions** — numbered, highest ROI first, each with a concrete step ("Go to your Business Profile → Edit → …")
+6. **Positives** — bullet list of what they're already doing well
 7. **Footer** — "Generated by GMB Auditor • ${auditDate}"
 
-Design requirements:
-- White background, clean sans-serif font (system-ui or Inter)
-- Color scheme: #1a73e8 (Google blue), #34a853 (green), #fbbc04 (amber), #ea4335 (red)
-- Score circles/badges should be visually prominent
-- Responsive, max-width 900px centered
-- All CSS inline or in a <style> tag inside <head>
-- Start the response with <!DOCTYPE html> — no preamble text outside the HTML`;
+Be specific and reference the actual data you found. If a field is missing from the raw text, note it as not found and explain the impact.`;
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
+    max_tokens: 5000,
     messages: [{ role: 'user', content: prompt }],
   });
 
   const block = message.content[0];
   if (block.type !== 'text') throw new Error('Unexpected Claude response type');
 
-  // Pull out the HTML block if Claude wrapped it in markdown fences
-  const raw = block.text;
-  const fenced = raw.match(/```html\s*([\s\S]*?)```/i);
+  const raw2 = block.text;
+  const fenced = raw2.match(/```html\s*([\s\S]*?)```/i);
   if (fenced) return fenced[1].trim();
-
-  const doctype = raw.indexOf('<!DOCTYPE html>');
-  if (doctype !== -1) return raw.slice(doctype).trim();
-
-  return raw.trim();
+  const doctype = raw2.indexOf('<!DOCTYPE html>');
+  if (doctype !== -1) return raw2.slice(doctype).trim();
+  return raw2.trim();
 }
