@@ -9,13 +9,56 @@ export interface GMBRawData {
   scrapedAt: string;
 }
 
-async function dismissConsent(page: Page): Promise<void> {
-  for (const sel of ['#L2AGLb', 'button[aria-label*="Accept all"]', 'button[aria-label*="Agree"]']) {
+// Force English locale and US region to avoid consent redirects
+function normalizeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.set('hl', 'en');
+    u.searchParams.set('gl', 'US');
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+// Pre-set Google consent cookies so the page never shows the interstitial
+async function setConsentCookies(page: Page): Promise<void> {
+  await page.setCookie(
+    { name: 'CONSENT',    value: 'YES+cb.20240101-00-p0.en+FX+111', domain: '.google.com', path: '/' },
+    { name: 'SOCS',       value: 'CAISHAgCEhJnd3NfMjAyNDAxMDEtMF9SQzEaAmVuIAEaBgiA', domain: '.google.com', path: '/' },
+  );
+}
+
+// Fallback: click through a consent page if it still appears
+async function clickConsentIfPresent(page: Page): Promise<void> {
+  const currentUrl = page.url();
+  if (!currentUrl.includes('consent.google') && !currentUrl.includes('accounts.google')) return;
+
+  // Try known button IDs / selectors (multi-language)
+  for (const sel of ['#L2AGLb', '.tHlp8d', 'form[action] button[jsname]']) {
     try {
       const el = await page.$(sel);
       if (el) {
         await el.click();
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 5000 }).catch(() => {});
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 8000 }).catch(() => {});
+        return;
+      }
+    } catch {}
+  }
+
+  // Try matching by visible button text (handles any language)
+  const acceptWords = ['Accept all', 'Alles accepteren', 'Alle akzeptieren',
+                       'Tout accepter', 'Acceptar todo', 'Accetta tutto'];
+  for (const word of acceptWords) {
+    try {
+      const clicked = await page.evaluate((w) => {
+        const btn = Array.from(document.querySelectorAll('button'))
+          .find(b => b.textContent?.includes(w));
+        if (btn) { btn.click(); return true; }
+        return false;
+      }, word);
+      if (clicked) {
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 8000 }).catch(() => {});
         return;
       }
     } catch {}
@@ -24,19 +67,11 @@ async function dismissConsent(page: Page): Promise<void> {
 
 async function getPanelText(page: Page): Promise<string> {
   return page.evaluate(() => {
-    // Try progressively broader selectors until we get meaningful text
-    const candidates = [
-      '[role="main"]',
-      '.m6QErb',
-      '.bJzME',
-      '.tAiQdd',
-      '.PPCwl',
-    ];
+    const candidates = ['[role="main"]', '.m6QErb', '.bJzME', '.tAiQdd', '.PPCwl'];
     for (const sel of candidates) {
       const el = document.querySelector(sel) as HTMLElement | null;
-      if (el?.innerText && el.innerText.trim().length > 300) {
+      if (el?.innerText && el.innerText.trim().length > 300)
         return el.innerText.trim().substring(0, 6000);
-      }
     }
     return (document.body as HTMLElement).innerText.trim().substring(0, 6000);
   });
@@ -44,7 +79,6 @@ async function getPanelText(page: Page): Promise<string> {
 
 async function clickTabAndGetText(page: Page, patterns: string[]): Promise<string> {
   try {
-    // Find a tab/button matching one of the patterns
     const tabs = await page.$$('[role="tab"], button');
     for (const tab of tabs) {
       const label: string = await page.evaluate(
@@ -63,6 +97,8 @@ async function clickTabAndGetText(page: Page, patterns: string[]): Promise<strin
 
 export async function scrapeGMB(url: string): Promise<GMBRawData> {
   let browser: Browser | null = null;
+  const targetUrl = normalizeUrl(url);
+
   try {
     browser = await puppeteer.launch({
       headless: true,
@@ -72,6 +108,7 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
         '--disable-dev-shm-usage',
         '--disable-blink-features=AutomationControlled',
         '--window-size=1440,900',
+        '--lang=en-US',
       ],
     });
 
@@ -85,8 +122,14 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
-    await dismissConsent(page);
+    // Visit google.com first so we can set cookies on the right domain
+    await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await setConsentCookies(page);
+
+    // Now navigate to the actual GMB listing
+    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    await clickConsentIfPresent(page);
+
     await page.waitForSelector('h1', { timeout: 20000 });
     await new Promise(r => setTimeout(r, 2500));
 
@@ -95,14 +138,7 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
     const reviewsText = await clickTabAndGetText(page, ['reviews']);
     const aboutText = await clickTabAndGetText(page, ['about']);
 
-    return {
-      url,
-      pageTitle,
-      overviewText,
-      reviewsText,
-      aboutText,
-      scrapedAt: new Date().toISOString(),
-    };
+    return { url, pageTitle, overviewText, reviewsText, aboutText, scrapedAt: new Date().toISOString() };
   } finally {
     await browser?.close();
   }
