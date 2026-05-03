@@ -1,60 +1,150 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
 
-export interface GMBData {
+export interface GMBRawData {
   url: string;
-  name: string;
-  category: string;
-  rating: string;
-  reviewCount: string;
-  address: string;
-  phone: string;
-  website: string;
-  hours: string;
-  isOpen: string;
-  photoCount: string;
-  description: string;
-  plusCode: string;
-  attributes: string[];
-  recentPostCount: string;
-  qaCount: string;
-  hasOwnerResponses: boolean;
+  pageTitle: string;
+  overviewText: string;
+  hoursText: string;
+  reviewsText: string;
+  aboutText: string;
   scrapedAt: string;
 }
 
-async function dismissConsent(page: Page): Promise<void> {
-  const selectors = ['#L2AGLb', 'button[aria-label*="Accept all"]', 'button[aria-label*="Agree"]'];
-  for (const sel of selectors) {
+function normalizeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.set('hl', 'en');
+    u.searchParams.set('gl', 'US');
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+async function setConsentCookies(page: Page): Promise<void> {
+  await page.setCookie(
+    { name: 'CONSENT', value: 'YES+cb.20240101-00-p0.en+FX+111', domain: '.google.com', path: '/' },
+    { name: 'SOCS',    value: 'CAISHAgCEhJnd3NfMjAyNDAxMDEtMF9SQzEaAmVuIAEaBgiA', domain: '.google.com', path: '/' },
+  );
+}
+
+async function clickConsentIfPresent(page: Page): Promise<void> {
+  const currentUrl = page.url();
+  if (!currentUrl.includes('consent.google') && !currentUrl.includes('accounts.google')) return;
+
+  for (const sel of ['#L2AGLb', '.tHlp8d', 'form[action] button[jsname]']) {
     try {
       const el = await page.$(sel);
       if (el) {
         await el.click();
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 5000 }).catch(() => {});
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 8000 }).catch(() => {});
+        return;
+      }
+    } catch {}
+  }
+
+  const acceptWords = ['Accept all', 'Alles accepteren', 'Alle akzeptieren',
+                       'Tout accepter', 'Acceptar todo', 'Accetta tutto'];
+  for (const word of acceptWords) {
+    try {
+      const clicked = await page.evaluate((w) => {
+        const btn = Array.from(document.querySelectorAll('button'))
+          .find(b => b.textContent?.includes(w));
+        if (btn) { (btn as HTMLElement).click(); return true; }
+        return false;
+      }, word);
+      if (clicked) {
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 8000 }).catch(() => {});
         return;
       }
     } catch {}
   }
 }
 
-async function clickTab(page: Page, labelPatterns: string[]): Promise<boolean> {
-  for (const pattern of labelPatterns) {
-    try {
-      const tabs = await page.$$('[role="tab"], button');
-      for (const tab of tabs) {
-        const label = await page.evaluate(el =>
-          (el.getAttribute('aria-label') || el.textContent || '').toLowerCase(), tab);
-        if (label.includes(pattern.toLowerCase())) {
-          await tab.click();
-          await new Promise(r => setTimeout(r, 1500));
+// Expand the hours dropdown so all 7 days are visible before we read the panel
+async function expandHours(page: Page): Promise<void> {
+  try {
+    const expanded = await page.evaluate(() => {
+      // The hours section has a button/div with aria-expanded="false"
+      // It typically contains "Open", "Closed", or a time like "9 AM"
+      const collapsed = Array.from(document.querySelectorAll('[aria-expanded="false"]')) as HTMLElement[];
+      for (const el of collapsed) {
+        const combined = (el.textContent || '') + (el.getAttribute('aria-label') || '');
+        if (/(open|closed|opens|closes)/i.test(combined) || /\d\s*(am|pm)/i.test(combined)) {
+          el.click();
           return true;
         }
       }
-    } catch {}
-  }
-  return false;
+      // Fallback: look for a button that has an hours-related data-item-id
+      const hoursBtn = document.querySelector('[data-item-id*="oh"]') as HTMLElement | null;
+      if (hoursBtn) { hoursBtn.click(); return true; }
+      return false;
+    });
+    if (expanded) await new Promise(r => setTimeout(r, 1200));
+  } catch {}
 }
 
-export async function scrapeGMB(url: string): Promise<GMBData> {
+// Extract all text content from the hours table/list after expansion
+async function extractHoursText(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    // After expanding, look for a table or list that contains Mon–Sun entries
+    const dayPattern = /monday|tuesday|wednesday|thursday|friday|saturday|sunday/i;
+    const candidates = Array.from(document.querySelectorAll('table, ul, [role="list"], div'))
+      .filter(el => dayPattern.test((el as HTMLElement).innerText || ''));
+    if (candidates.length > 0) {
+      // Pick the most specific (smallest matching) element
+      candidates.sort((a, b) => (a.textContent?.length ?? 0) - (b.textContent?.length ?? 0));
+      return (candidates[0] as HTMLElement).innerText?.trim().substring(0, 1000) ?? '';
+    }
+    return '';
+  });
+}
+
+// Extract the service-area text if there is no physical address shown
+async function extractServiceArea(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const all = Array.from(document.querySelectorAll('*'));
+    for (const el of all) {
+      const text = (el as HTMLElement).innerText?.trim() ?? '';
+      if (/service.?area/i.test(text) && text.length < 300) return text;
+    }
+    return '';
+  });
+}
+
+async function getPanelText(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const candidates = ['[role="main"]', '.m6QErb', '.bJzME', '.tAiQdd', '.PPCwl'];
+    for (const sel of candidates) {
+      const el = document.querySelector(sel) as HTMLElement | null;
+      if (el?.innerText && el.innerText.trim().length > 300)
+        return el.innerText.trim().substring(0, 7000);
+    }
+    return (document.body as HTMLElement).innerText.trim().substring(0, 7000);
+  });
+}
+
+async function clickTabAndGetText(page: Page, patterns: string[]): Promise<string> {
+  try {
+    const tabs = await page.$$('[role="tab"], button');
+    for (const tab of tabs) {
+      const label: string = await page.evaluate(
+        el => ((el as HTMLElement).getAttribute('aria-label') || (el as HTMLElement).textContent || '').toLowerCase(),
+        tab
+      );
+      if (patterns.some(p => label.includes(p.toLowerCase()))) {
+        await tab.click();
+        await new Promise(r => setTimeout(r, 2000));
+        return getPanelText(page);
+      }
+    }
+  } catch {}
+  return '';
+}
+
+export async function scrapeGMB(url: string): Promise<GMBRawData> {
   let browser: Browser | null = null;
+  const targetUrl = normalizeUrl(url);
 
   try {
     browser = await puppeteer.launch({
@@ -65,6 +155,7 @@ export async function scrapeGMB(url: string): Promise<GMBData> {
         '--disable-dev-shm-usage',
         '--disable-blink-features=AutomationControlled',
         '--window-size=1440,900',
+        '--lang=en-US',
       ],
     });
 
@@ -78,154 +169,35 @@ export async function scrapeGMB(url: string): Promise<GMBData> {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 45000 });
-    await dismissConsent(page);
+    await page.goto('https://www.google.com', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+    await setConsentCookies(page);
+
+    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+    await clickConsentIfPresent(page);
     await page.waitForSelector('h1', { timeout: 20000 });
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 2500));
 
-    // Extract main panel data
-    const main = await page.evaluate(() => {
-      const getText = (...selectors: string[]): string => {
-        for (const sel of selectors) {
-          const el = document.querySelector(sel);
-          if (el?.textContent?.trim()) return el.textContent.trim();
-        }
-        return '';
-      };
+    // Expand hours BEFORE reading the main panel so the full week is visible
+    await expandHours(page);
+    const hoursText = await extractHoursText(page);
+    const serviceArea = await extractServiceArea(page);
 
-      const name = getText('h1.DUwDvf', 'h1');
+    const overviewText = await getPanelText(page);
+    const reviewsText = await clickTabAndGetText(page, ['reviews']);
+    const aboutText   = await clickTabAndGetText(page, ['about']);
 
-      // Category is typically a button near the title
-      const category = getText('button.DkEaL', '.fontBodyMedium button');
-
-      // Rating: aria-hidden span inside rating widget
-      const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"]');
-      const rating = ratingEl?.textContent?.trim() ?? '';
-
-      // Review count: find span with aria-label containing "reviews"
-      let reviewCount = '';
-      document.querySelectorAll('[aria-label]').forEach(el => {
-        const lbl = el.getAttribute('aria-label') ?? '';
-        const m = lbl.match(/([\d,]+)\s+review/i);
-        if (m && !reviewCount) reviewCount = m[1].replace(/,/g, '');
-      });
-      // Fallback: look for a link/button whose text is just a number near the rating
-      if (!reviewCount) {
-        const btn = document.querySelector('button[aria-label*="review"]');
-        if (btn) {
-          const m = (btn.textContent ?? '').match(/([\d,]+)/);
-          if (m) reviewCount = m[1].replace(/,/g, '');
-        }
-      }
-
-      // Address / phone / website via data-item-id or aria-label
-      let address = '', phone = '', website = '';
-      document.querySelectorAll('[data-item-id], [aria-label]').forEach(el => {
-        const id = el.getAttribute('data-item-id') ?? '';
-        const lbl = el.getAttribute('aria-label') ?? '';
-        const text = el.textContent?.trim() ?? '';
-
-        if (!address && (id === 'address' || /^address:/i.test(lbl)))
-          address = lbl.replace(/^address:\s*/i, '') || text;
-
-        if (!phone && (id.includes('phone') || /phone number:/i.test(lbl)))
-          phone = lbl.replace(/phone number:\s*/i, '').replace(/^phone:\s*/i, '') || text;
-
-        if (!website && (id.includes('authority') || id.includes('website') || /^website:/i.test(lbl)))
-          website = lbl.replace(/^website:\s*/i, '') || text;
-      });
-
-      // Hours summary (aria-label on the hours button/row)
-      let hours = '', isOpen = '';
-      document.querySelectorAll('[aria-label]').forEach(el => {
-        const lbl = el.getAttribute('aria-label') ?? '';
-        if (!hours && /\d+(:\d+)?\s*(am|pm)/i.test(lbl)) hours = lbl;
-        if (!isOpen) {
-          const text = el.textContent?.trim() ?? '';
-          if (/^(open now|closed|opens|closes)/i.test(text)) isOpen = text;
-        }
-      });
-
-      // Plus code
-      let plusCode = '';
-      document.querySelectorAll('[aria-label]').forEach(el => {
-        const lbl = el.getAttribute('aria-label') ?? '';
-        if (/plus code/i.test(lbl) && !plusCode)
-          plusCode = lbl.replace(/plus code:\s*/i, '').trim();
-      });
-
-      // Photo count from tab or button text
-      let photoCount = '';
-      document.querySelectorAll('button, [role="tab"]').forEach(el => {
-        const text = el.textContent ?? '';
-        const lbl = el.getAttribute('aria-label') ?? '';
-        if (/photo/i.test(text + lbl) && !photoCount) {
-          const m = (text + lbl).match(/([\d,]+)/);
-          if (m) photoCount = m[1].replace(/,/g, '');
-        }
-      });
-
-      return { name, category, rating, reviewCount, address, phone, website, hours, isOpen, plusCode, photoCount };
-    });
-
-    // About tab — description & attributes
-    let description = '';
-    let attributes: string[] = [];
-    const clickedAbout = await clickTab(page, ['about']);
-    if (clickedAbout) {
-      const aboutData = await page.evaluate(() => {
-        const desc =
-          document.querySelector('.PYvSYb')?.textContent?.trim() ??
-          document.querySelector('[aria-label="From the business"]')?.nextElementSibling?.textContent?.trim() ??
-          '';
-
-        const attrs: string[] = [];
-        document.querySelectorAll('.E0DTEd, [class*="attribute"], li').forEach(el => {
-          const t = el.textContent?.trim();
-          if (t && t.length < 80 && t.length > 2) attrs.push(t);
-        });
-        return { description: desc, attributes: [...new Set(attrs)].slice(0, 20) };
-      });
-      description = aboutData.description;
-      attributes = aboutData.attributes;
-    }
-
-    // Updates / Posts tab
-    let recentPostCount = '0';
-    const clickedUpdates = await clickTab(page, ['updates', 'posts']);
-    if (clickedUpdates) {
-      const count = await page.evaluate(() =>
-        document.querySelectorAll('[role="article"], .Yr7JMd-pane').length
-      );
-      recentPostCount = count > 0 ? String(count) : '0';
-    }
-
-    // Q&A tab
-    let qaCount = '0';
-    await clickTab(page, ['q&a', 'questions']);
-    const qaData = await page.evaluate(() => {
-      const items = document.querySelectorAll('[role="listitem"], .qjESne');
-      return String(items.length);
-    });
-    qaCount = qaData !== '0' ? qaData : qaCount;
-
-    // Reviews tab — owner responses
-    let hasOwnerResponses = false;
-    const clickedReviews = await clickTab(page, ['reviews']);
-    if (clickedReviews) {
-      hasOwnerResponses = await page.evaluate(() =>
-        document.querySelectorAll('.CDe7pd, [aria-label*="Response from the owner"]').length > 0
-      );
-    }
+    // Append service-area info to overview so the report generator sees it
+    const fullOverview = serviceArea
+      ? `${overviewText}\n\n[SERVICE AREA INFO]\n${serviceArea}`
+      : overviewText;
 
     return {
       url,
-      ...main,
-      description,
-      attributes,
-      recentPostCount,
-      qaCount,
-      hasOwnerResponses,
+      pageTitle: await page.title(),
+      overviewText: fullOverview,
+      hoursText,
+      reviewsText,
+      aboutText,
       scrapedAt: new Date().toISOString(),
     };
   } finally {

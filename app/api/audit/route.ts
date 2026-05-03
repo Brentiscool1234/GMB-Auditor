@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { scrapeGMB } from '@/lib/scraper';
-import { computeScores, generateReport } from '@/lib/report';
+import { generateReport } from '@/lib/report';
 
 function isValidGMBUrl(url: string): boolean {
   try {
@@ -32,16 +32,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const data = await scrapeGMB(url);
-    const scores = computeScores(data);
-    const html = await generateReport(data, scores);
-    return NextResponse.json({ html, data, scores });
+    const raw = await scrapeGMB(url);
+    const html = await generateReport(raw);
+    return NextResponse.json({ html });
   } catch (err) {
     console.error('Audit error:', err);
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json(
-      { error: `Audit failed: ${message}` },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: `Audit failed: ${message}` }, { status: 500 });
   }
 }
