@@ -62,30 +62,64 @@ async function clickConsentIfPresent(page: Page): Promise<void> {
   }
 }
 
-// Dedicated extraction for rating + review count from aria-labels and button text.
-// Google Maps encodes this in aria-labels like "4.8 stars 1,234 reviews" and in
-// button text like "1,234 reviews". Extracting it separately avoids it being
-// buried or lost in the larger panel text blob.
+// Extract star rating and review count using every technique available.
+// Google Maps encodes this in multiple places — aria-labels, specific CSS classes,
+// innerText patterns, and JavaScript initialization state. We try all of them.
 async function extractRatingInfo(page: Page): Promise<string> {
   return page.evaluate(() => {
-    const lines: string[] = [];
+    const hits = new Set<string>();
 
-    // Scan all aria-labels for rating / review patterns
+    // 1. aria-label scan — "4.8 stars", "4.8 stars 1,234 reviews", etc.
     document.querySelectorAll('[aria-label]').forEach(el => {
       const lbl = el.getAttribute('aria-label') ?? '';
-      if (/(\d[\d.]*)\s*stars?/i.test(lbl) || /[\d,]+\s*reviews?/i.test(lbl)) {
-        lines.push(lbl.trim());
+      if (/\d[\d.]*\s*stars?/i.test(lbl) || /[\d,]+\s*reviews?/i.test(lbl) || /rated\s+\d/i.test(lbl)) {
+        hits.add(lbl.trim());
       }
     });
 
-    // Also scan button/span text for standalone review counts like "1,234 reviews"
-    document.querySelectorAll('button, span, a').forEach(el => {
+    // 2. Known Google Maps rating/review CSS classes (change over time but try anyway)
+    for (const sel of [
+      'span.MW4etd', 'span.UY7F9', 'div.F7nice', 'span.Aq14fc',
+      'g-review-stars', 'div.gm2-caption', 'span[jslog]',
+    ]) {
+      document.querySelectorAll(sel).forEach(el => {
+        const t = (el as HTMLElement).innerText?.trim() ?? '';
+        if (t && /^[\d.,]+$/.test(t)) hits.add(`Rating: ${t}`);
+        if (/[\d,]+\s*reviews?/i.test(t)) hits.add(t);
+      });
+    }
+
+    // 3. innerText scan for standalone review counts and rating numbers
+    document.querySelectorAll('button, span, a, div').forEach(el => {
       const txt = (el as HTMLElement).innerText?.trim() ?? '';
-      if (/^[\d,]+\s*reviews?$/i.test(txt)) lines.push(txt);
+      // "384 reviews" or "1,234 reviews"
+      if (/^[\d,]+\s*reviews?$/i.test(txt)) hits.add(txt);
+      // "(384)" or "(1,234)" — parenthesised review count next to a star rating
+      if (/^\([\d,]+\)$/.test(txt)) hits.add(`Reviews: ${txt.replace(/[()]/g, '')}`);
+      // "4.8" or "5.0" alone in a small element — likely the rating digit
+      if (/^\d\.\d$/.test(txt)) hits.add(`Rating: ${txt}`);
     });
 
-    // Deduplicate and return
-    return [...new Set(lines)].join(' | ');
+    // 4. Scan visible page text for "5.0\n(384)" or "4.8 · 1,234 reviews" patterns
+    const bodyText = (document.body as HTMLElement).innerText ?? '';
+    const ratingBlock = bodyText.match(/(\d\.\d)\s*[\n·(]+\s*([\d,]+)\s*\)?/);
+    if (ratingBlock) hits.add(`Rating ${ratingBlock[1]}, ${ratingBlock[2]} reviews`);
+
+    // 5. Try to pull from APP_INITIALIZATION_STATE JS variable embedded in page
+    try {
+      const scripts = Array.from(document.querySelectorAll('script:not([src])'));
+      for (const s of scripts) {
+        const src = s.textContent ?? '';
+        // Matches patterns like ,4.8,384, or "4.8","384"
+        const m = src.match(/"?(\d\.\d)"?,\s*"?([\d]+)"?\s*,\s*(?:null|\d)/);
+        if (m && parseFloat(m[1]) >= 1 && parseFloat(m[1]) <= 5) {
+          hits.add(`Rating: ${m[1]}, Reviews: ${m[2]}`);
+          break;
+        }
+      }
+    } catch {}
+
+    return [...hits].join(' | ') || '(not captured)';
   });
 }
 

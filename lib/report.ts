@@ -38,6 +38,8 @@ ${raw.aboutText ? raw.aboutText.substring(0, 2000) : '(empty)'}
 
 IMPORTANT NOTES FOR SCORING:
 - Use the RATING & REVIEW COUNT field above as the authoritative source for star rating and number of reviews. Do not guess low if a count is present there.
+- The RATING & REVIEW COUNT field may contain fragments like "Rating: 5.0", "384 reviews", "(384)", "Reviews: 384" — treat ANY numeric value preceded by "Rating:" as the star rating, and ANY numeric value near "reviews" or "Reviews:" as the review count. Combine them even if they appear in separate fragments.
+- If the star rating found is 4.5 or higher, score the Review Profile rating component at the full 50 points. Never score a confirmed high rating as 0.
 - ADDRESS: If no street address is found, do NOT penalize or flag this as missing. Many businesses (especially service-area businesses) intentionally hide their physical address. Only note address/service area if "Service area:" text is explicitly present.
 - HOURS: Google Maps only exposes the current day's hours by default. If ANY hours data is present (even just one day), treat hours as LISTED and PRESENT — do not flag partial hours as a deficiency. Never say hours are "partial" or "missing days". Only flag hours as missing if absolutely no hours text was found at all.
 
