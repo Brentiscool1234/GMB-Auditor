@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { GMBRawData } from './scraper';
 
-export async function generateReport(raw: GMBRawData): Promise<string> {
+export async function generateReport(raw: GMBRawData, manualReviewCount?: string): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set in your .env file.');
   const client = new Anthropic({ apiKey });
@@ -23,6 +23,7 @@ AUDIT DATE: ${auditDate}
 
 RATING & REVIEW COUNT (extracted from aria-labels — this is the most reliable source):
 ${raw.ratingInfo || '(not captured)'}
+${manualReviewCount ? `MANUALLY PROVIDED REVIEW COUNT: ${manualReviewCount} reviews — treat this as the definitive review count; it overrides anything auto-detected above.` : ''}
 
 OVERVIEW TEXT (main panel):
 ${raw.overviewText || '(empty)'}

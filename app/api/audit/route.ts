@@ -18,8 +18,9 @@ function isValidGMBUrl(url: string): boolean {
 
 export async function POST(req: NextRequest) {
   let url: string;
+  let reviewCount: string | undefined;
   try {
-    ({ url } = await req.json());
+    ({ url, reviewCount } = await req.json());
   } catch {
     return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
   }
@@ -33,7 +34,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const raw = await scrapeGMB(url);
-    const html = await generateReport(raw);
+    const html = await generateReport(raw, reviewCount);
     return NextResponse.json({ html });
   } catch (err) {
     console.error('Audit error:', err);
