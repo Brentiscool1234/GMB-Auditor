@@ -194,33 +194,41 @@ async function extractServiceArea(page: Page): Promise<string> {
   });
 }
 
-// Detect owner responses by scrolling the reviews panel to load lazy content,
-// then scanning the full page text. Also accepts already-captured reviewsText
-// as a fallback in case DOM detection misses older responses.
+// Detect owner responses. Checks captured text first, then scrolls the
+// Google Maps side panel (which has its own scroll container) in passes
+// to lazy-load older reviews before scanning.
 async function detectOwnerResponds(page: Page, reviewsText: string): Promise<boolean> {
-  // First check already-captured text — owner responses in top reviews are already there
-  if (/response from the owner|owner's response|replied by owner/i.test(reviewsText)) {
-    return true;
+  const pattern = /response from the owner|owner's response|replied by owner/i;
+
+  if (pattern.test(reviewsText)) return true;
+
+  // Scroll the side panel — Google Maps doesn't use window scroll for reviews
+  for (let pass = 0; pass < 4; pass++) {
+    try {
+      await page.evaluate(() => {
+        // Walk candidate containers and scroll the first one that is actually scrollable
+        const selectors = ['[role="main"]', '.m6QErb', '.bJzME', '.tAiQdd', '.DxyBCb', '.e07Vkf'];
+        for (const sel of selectors) {
+          const el = document.querySelector(sel) as HTMLElement | null;
+          if (el && el.scrollHeight > el.clientHeight + 50) {
+            el.scrollTop += 2500;
+            return;
+          }
+        }
+        window.scrollBy(0, 2500);
+      });
+      await new Promise(r => setTimeout(r, 1500));
+
+      const found = await page.evaluate(() =>
+        /response from the owner|owner's response|replied by owner/i.test(
+          (document.body as HTMLElement).innerText ?? ''
+        )
+      );
+      if (found) return true;
+    } catch {}
   }
 
-  // Scroll the reviews panel to trigger lazy-loading of more reviews
-  try {
-    await page.evaluate(() => {
-      const panel = document.querySelector('[role="main"]') as HTMLElement | null;
-      if (panel) {
-        panel.scrollTop += 3000;
-      } else {
-        window.scrollBy(0, 3000);
-      }
-    });
-    await new Promise(r => setTimeout(r, 2000));
-  } catch {}
-
-  // Re-scan the DOM after scrolling
-  return page.evaluate(() => {
-    const body = (document.body as HTMLElement).innerText ?? '';
-    return /response from the owner|owner's response|replied by owner/i.test(body);
-  });
+  return false;
 }
 
 async function getPanelText(page: Page): Promise<string> {
