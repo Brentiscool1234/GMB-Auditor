@@ -31,6 +31,8 @@ ${raw.overviewText || '(empty)'}
 HOURS (expanded weekly schedule — extracted after clicking the hours toggle):
 ${raw.hoursText || '(not captured — check overview text for partial hours)'}
 
+OWNER RESPONDS TO REVIEWS: ${raw.ownerResponds ? 'YES — "Response from the owner" text was detected on the page. Award full points for owner engagement.' : 'NOT DETECTED'}
+
 REVIEWS TAB TEXT:
 ${raw.reviewsText ? raw.reviewsText.substring(0, 2000) : '(empty)'}
 

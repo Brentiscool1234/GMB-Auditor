@@ -8,6 +8,7 @@ export interface GMBRawData {
   hoursText: string;
   reviewsText: string;
   aboutText: string;
+  ownerResponds: boolean;
   scrapedAt: string;
 }
 
@@ -193,6 +194,15 @@ async function extractServiceArea(page: Page): Promise<string> {
   });
 }
 
+// Detect owner responses by scanning the full page text for the standard
+// Google Maps "Response from the owner" label (present in multiple locales).
+async function detectOwnerResponds(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const body = (document.body as HTMLElement).innerText ?? '';
+    return /response from the owner|owner's response|replied by owner/i.test(body);
+  });
+}
+
 async function getPanelText(page: Page): Promise<string> {
   return page.evaluate(() => {
     const candidates = ['[role="main"]', '.m6QErb', '.bJzME', '.tAiQdd', '.PPCwl'];
@@ -272,6 +282,7 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
     const serviceArea = await extractServiceArea(page);
     const overviewText = await getPanelText(page);
     const reviewsText = await clickTabAndGetText(page, ['reviews']);
+    const ownerResponds = await detectOwnerResponds(page);
     const aboutText   = await clickTabAndGetText(page, ['about']);
 
     const fullOverview = serviceArea
@@ -286,6 +297,7 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
       hoursText,
       reviewsText,
       aboutText,
+      ownerResponds,
       scrapedAt: new Date().toISOString(),
     };
   } finally {
