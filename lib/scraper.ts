@@ -194,9 +194,29 @@ async function extractServiceArea(page: Page): Promise<string> {
   });
 }
 
-// Detect owner responses by scanning the full page text for the standard
-// Google Maps "Response from the owner" label (present in multiple locales).
-async function detectOwnerResponds(page: Page): Promise<boolean> {
+// Detect owner responses by scrolling the reviews panel to load lazy content,
+// then scanning the full page text. Also accepts already-captured reviewsText
+// as a fallback in case DOM detection misses older responses.
+async function detectOwnerResponds(page: Page, reviewsText: string): Promise<boolean> {
+  // First check already-captured text — owner responses in top reviews are already there
+  if (/response from the owner|owner's response|replied by owner/i.test(reviewsText)) {
+    return true;
+  }
+
+  // Scroll the reviews panel to trigger lazy-loading of more reviews
+  try {
+    await page.evaluate(() => {
+      const panel = document.querySelector('[role="main"]') as HTMLElement | null;
+      if (panel) {
+        panel.scrollTop += 3000;
+      } else {
+        window.scrollBy(0, 3000);
+      }
+    });
+    await new Promise(r => setTimeout(r, 2000));
+  } catch {}
+
+  // Re-scan the DOM after scrolling
   return page.evaluate(() => {
     const body = (document.body as HTMLElement).innerText ?? '';
     return /response from the owner|owner's response|replied by owner/i.test(body);
@@ -282,7 +302,7 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
     const serviceArea = await extractServiceArea(page);
     const overviewText = await getPanelText(page);
     const reviewsText = await clickTabAndGetText(page, ['reviews']);
-    const ownerResponds = await detectOwnerResponds(page);
+    const ownerResponds = await detectOwnerResponds(page, reviewsText);
     const aboutText   = await clickTabAndGetText(page, ['about']);
 
     const fullOverview = serviceArea

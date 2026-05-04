@@ -61,10 +61,10 @@ Overall = average of the 4 category scores, rounded to nearest integer.
 
 CRITICAL HTML RULES — you are writing an HTML document, not markdown:
 - Start immediately with <!DOCTYPE html> — zero text before it
-- NEVER use markdown syntax anywhere: no [text](url), no **bold**, no # headings, no backticks
-- All links must be proper HTML: <a href="https://...">link text</a>
-- All bold text must use <strong> tags
-- All headings must use <h1>/<h2>/<h3> tags
+- ABSOLUTE PROHIBITION on markdown syntax: the string "[" followed by text followed by "](" must NEVER appear anywhere in your output — write <a href="URL">text</a> instead
+- ABSOLUTE PROHIBITION on **bold** markdown — use <strong>text</strong> instead
+- ABSOLUTE PROHIBITION on # heading markdown — use <h1>/<h2>/<h3> tags instead
+- No backticks anywhere
 - All CSS goes in a <style> block inside <head>
 - No inline style attributes
 
@@ -97,7 +97,7 @@ CRITICAL RULE — CONFIRMED DATA ONLY:
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 5000,
+    max_tokens: 8000,
     messages: [{ role: 'user', content: prompt }],
   });
 
