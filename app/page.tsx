@@ -6,6 +6,7 @@ type Status = 'idle' | 'scraping' | 'generating' | 'done' | 'error';
 
 export default function Home() {
   const [url, setUrl] = useState('');
+  const [reviewCount, setReviewCount] = useState('');
   const [status, setStatus] = useState<Status>('idle');
   const [reportHtml, setReportHtml] = useState('');
   const [error, setError] = useState('');
@@ -21,7 +22,7 @@ export default function Home() {
       const res = await fetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: url.trim(), reviewCount: reviewCount.trim() || undefined }),
       });
 
       setStatus('generating');
@@ -74,23 +75,36 @@ export default function Home() {
           Paste your Google Maps URL and get a full AI-powered audit with a downloadable PDF report — no API key required on your end.
         </p>
 
-        <div className="w-full max-w-2xl flex gap-3">
-          <input
-            type="url"
-            value={url}
-            onChange={e => setUrl(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !isLoading && runAudit()}
-            placeholder="https://www.google.com/maps/place/..."
-            className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 placeholder-gray-600 transition-colors"
-            disabled={isLoading}
-          />
-          <button
-            onClick={runAudit}
-            disabled={isLoading || !url.trim()}
-            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-6 py-3 rounded-xl text-sm transition-colors whitespace-nowrap"
-          >
-            {isLoading ? 'Auditing...' : 'Run Audit'}
-          </button>
+        <div className="w-full max-w-2xl flex flex-col gap-3">
+          <div className="flex gap-3">
+            <input
+              type="url"
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !isLoading && runAudit()}
+              placeholder="https://www.google.com/maps/place/..."
+              className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500 placeholder-gray-600 transition-colors"
+              disabled={isLoading}
+            />
+            <button
+              onClick={runAudit}
+              disabled={isLoading || !url.trim()}
+              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold px-6 py-3 rounded-xl text-sm transition-colors whitespace-nowrap"
+            >
+              {isLoading ? 'Auditing...' : 'Run Audit'}
+            </button>
+          </div>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min="0"
+              value={reviewCount}
+              onChange={e => setReviewCount(e.target.value)}
+              placeholder="Review count (optional — enter manually if auto-detect fails)"
+              className="flex-1 bg-gray-900 border border-gray-700 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500 placeholder-gray-600 transition-colors"
+              disabled={isLoading}
+            />
+          </div>
         </div>
 
         {/* Status indicator */}

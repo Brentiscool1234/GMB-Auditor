@@ -3,6 +3,7 @@ import puppeteer, { Browser, Page } from 'puppeteer';
 export interface GMBRawData {
   url: string;
   pageTitle: string;
+  ratingInfo: string;
   overviewText: string;
   hoursText: string;
   reviewsText: string;
@@ -61,52 +62,132 @@ async function clickConsentIfPresent(page: Page): Promise<void> {
   }
 }
 
-// Expand the hours dropdown so all 7 days are visible before we read the panel
+// Extract star rating and review count using every technique available.
+// Google Maps encodes this in multiple places — aria-labels, specific CSS classes,
+// innerText patterns, and JavaScript initialization state. We try all of them.
+async function extractRatingInfo(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const hits = new Set<string>();
+
+    // 1. aria-label scan — "4.8 stars", "4.8 stars 1,234 reviews", etc.
+    document.querySelectorAll('[aria-label]').forEach(el => {
+      const lbl = el.getAttribute('aria-label') ?? '';
+      if (/\d[\d.]*\s*stars?/i.test(lbl) || /[\d,]+\s*reviews?/i.test(lbl) || /rated\s+\d/i.test(lbl)) {
+        hits.add(lbl.trim());
+      }
+    });
+
+    // 2. Known Google Maps rating/review CSS classes (change over time but try anyway)
+    for (const sel of [
+      'span.MW4etd', 'span.UY7F9', 'div.F7nice', 'span.Aq14fc',
+      'g-review-stars', 'div.gm2-caption', 'span[jslog]',
+    ]) {
+      document.querySelectorAll(sel).forEach(el => {
+        const t = (el as HTMLElement).innerText?.trim() ?? '';
+        if (t && /^[\d.,]+$/.test(t)) hits.add(`Rating: ${t}`);
+        if (/[\d,]+\s*reviews?/i.test(t)) hits.add(t);
+      });
+    }
+
+    // 3. innerText scan for standalone review counts and rating numbers
+    document.querySelectorAll('button, span, a, div').forEach(el => {
+      const txt = (el as HTMLElement).innerText?.trim() ?? '';
+      // "384 reviews" or "1,234 reviews"
+      if (/^[\d,]+\s*reviews?$/i.test(txt)) hits.add(txt);
+      // "(384)" or "(1,234)" — parenthesised review count next to a star rating
+      if (/^\([\d,]+\)$/.test(txt)) hits.add(`Reviews: ${txt.replace(/[()]/g, '')}`);
+      // "4.8" or "5.0" alone in a small element — likely the rating digit
+      if (/^\d\.\d$/.test(txt)) hits.add(`Rating: ${txt}`);
+    });
+
+    // 4. Scan visible page text for "5.0\n(384)" or "4.8 · 1,234 reviews" patterns
+    const bodyText = (document.body as HTMLElement).innerText ?? '';
+    const ratingBlock = bodyText.match(/(\d\.\d)\s*[\n·(]+\s*([\d,]+)\s*\)?/);
+    if (ratingBlock) hits.add(`Rating ${ratingBlock[1]}, ${ratingBlock[2]} reviews`);
+
+    // 5. Try to pull from APP_INITIALIZATION_STATE JS variable embedded in page
+    try {
+      const scripts = Array.from(document.querySelectorAll('script:not([src])'));
+      for (const s of scripts) {
+        const src = s.textContent ?? '';
+        // Matches patterns like ,4.8,384, or "4.8","384"
+        const m = src.match(/"?(\d\.\d)"?,\s*"?([\d]+)"?\s*,\s*(?:null|\d)/);
+        if (m && parseFloat(m[1]) >= 1 && parseFloat(m[1]) <= 5) {
+          hits.add(`Rating: ${m[1]}, Reviews: ${m[2]}`);
+          break;
+        }
+      }
+    } catch {}
+
+    return [...hits].join(' | ') || '(not captured)';
+  });
+}
+
+// Expand the hours toggle so all 7 days become visible in the DOM.
+// Strategy: click any aria-expanded="false" element whose text/label mentions
+// open/closed or a time, then fall back to data-item-id="oh" (opening hours).
 async function expandHours(page: Page): Promise<void> {
   try {
-    const expanded = await page.evaluate(() => {
-      // The hours section has a button/div with aria-expanded="false"
-      // It typically contains "Open", "Closed", or a time like "9 AM"
-      const collapsed = Array.from(document.querySelectorAll('[aria-expanded="false"]')) as HTMLElement[];
+    const clicked = await page.evaluate(() => {
+      const collapsed = Array.from(
+        document.querySelectorAll('[aria-expanded="false"]')
+      ) as HTMLElement[];
+
       for (const el of collapsed) {
-        const combined = (el.textContent || '') + (el.getAttribute('aria-label') || '');
+        const combined = (el.textContent ?? '') + (el.getAttribute('aria-label') ?? '');
         if (/(open|closed|opens|closes)/i.test(combined) || /\d\s*(am|pm)/i.test(combined)) {
           el.click();
           return true;
         }
       }
-      // Fallback: look for a button that has an hours-related data-item-id
-      const hoursBtn = document.querySelector('[data-item-id*="oh"]') as HTMLElement | null;
-      if (hoursBtn) { hoursBtn.click(); return true; }
+
+      // Fallback: element with opening-hours data-item-id
+      const oh = document.querySelector('[data-item-id*="oh"]') as HTMLElement | null;
+      if (oh) { oh.click(); return true; }
+
       return false;
     });
-    if (expanded) await new Promise(r => setTimeout(r, 1200));
+
+    // Give the DOM time to render the expanded week view
+    if (clicked) await new Promise(r => setTimeout(r, 2000));
   } catch {}
 }
 
-// Extract all text content from the hours table/list after expansion
+// Extract the full weekly hours after expansion.
+// Scans ALL elements for day-of-week names and collects the most relevant block.
 async function extractHoursText(page: Page): Promise<string> {
   return page.evaluate(() => {
-    // After expanding, look for a table or list that contains Mon–Sun entries
-    const dayPattern = /monday|tuesday|wednesday|thursday|friday|saturday|sunday/i;
-    const candidates = Array.from(document.querySelectorAll('table, ul, [role="list"], div'))
-      .filter(el => dayPattern.test((el as HTMLElement).innerText || ''));
-    if (candidates.length > 0) {
-      // Pick the most specific (smallest matching) element
-      candidates.sort((a, b) => (a.textContent?.length ?? 0) - (b.textContent?.length ?? 0));
-      return (candidates[0] as HTMLElement).innerText?.trim().substring(0, 1000) ?? '';
+    const dayPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+
+    // Collect innerText from every element that contains at least one day name
+    const hits = Array.from(document.querySelectorAll('*'))
+      .map(el => (el as HTMLElement).innerText?.trim() ?? '')
+      .filter(t => dayPattern.test(t) && t.length < 2000);
+
+    if (hits.length === 0) return '';
+
+    // Sort by length ascending — the shortest hit that still contains a day
+    // is usually the most focused hours block
+    hits.sort((a, b) => a.length - b.length);
+
+    // Walk up until we find one that contains multiple days (fuller schedule)
+    for (const text of hits) {
+      const dayCount = (text.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi) ?? []).length;
+      if (dayCount >= 3) return text.substring(0, 1200);
     }
-    return '';
+
+    // Return smallest even if it only has one or two days
+    return hits[0].substring(0, 1200);
   });
 }
 
-// Extract the service-area text if there is no physical address shown
+// Capture "Service area:" text for SABs that hide their physical address.
 async function extractServiceArea(page: Page): Promise<string> {
   return page.evaluate(() => {
     const all = Array.from(document.querySelectorAll('*'));
     for (const el of all) {
       const text = (el as HTMLElement).innerText?.trim() ?? '';
-      if (/service.?area/i.test(text) && text.length < 300) return text;
+      if (/service.?area/i.test(text) && text.length < 400) return text;
     }
     return '';
   });
@@ -159,7 +240,10 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
       ],
     });
 
+    const context = browser.defaultBrowserContext();
+    await context.overridePermissions('https://www.google.com', ['geolocation']);
     const page = await browser.newPage();
+    await page.setGeolocation({ latitude: 37.0902, longitude: -95.7129, accuracy: 100 });
     await page.setViewport({ width: 1440, height: 900 });
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -177,16 +261,19 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
     await page.waitForSelector('h1', { timeout: 20000 });
     await new Promise(r => setTimeout(r, 2500));
 
-    // Expand hours BEFORE reading the main panel so the full week is visible
-    await expandHours(page);
-    const hoursText = await extractHoursText(page);
-    const serviceArea = await extractServiceArea(page);
+    // Extract rating + review count before anything else moves focus
+    const ratingInfo = await extractRatingInfo(page);
 
+    // Expand hours, then extract the full weekly schedule
+    await expandHours(page);
+    await new Promise(r => setTimeout(r, 500)); // small extra settle
+    const hoursText = await extractHoursText(page);
+
+    const serviceArea = await extractServiceArea(page);
     const overviewText = await getPanelText(page);
     const reviewsText = await clickTabAndGetText(page, ['reviews']);
     const aboutText   = await clickTabAndGetText(page, ['about']);
 
-    // Append service-area info to overview so the report generator sees it
     const fullOverview = serviceArea
       ? `${overviewText}\n\n[SERVICE AREA INFO]\n${serviceArea}`
       : overviewText;
@@ -194,6 +281,7 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
     return {
       url,
       pageTitle: await page.title(),
+      ratingInfo,
       overviewText: fullOverview,
       hoursText,
       reviewsText,
