@@ -31,8 +31,6 @@ ${raw.overviewText || '(empty)'}
 HOURS (expanded weekly schedule — extracted after clicking the hours toggle):
 ${raw.hoursText || '(not captured — check overview text for partial hours)'}
 
-OWNER RESPONDS TO REVIEWS: ${raw.ownerResponds ? 'YES — "Response from the owner" text was detected on the page. Award full points for owner engagement.' : 'NOT DETECTED'}
-
 REVIEWS TAB TEXT:
 ${raw.reviewsText ? raw.reviewsText.substring(0, 2000) : '(empty)'}
 
@@ -51,7 +49,7 @@ IMPORTANT NOTES FOR SCORING:
 SCORING RUBRIC (score each 0–100 based strictly on what you can confirm from the data above):
 
 Basic Info — 20pts: business name | 20pts: address or service area (if neither present give 20pts anyway — many SABs hide address by design) | 20pts: phone | 20pts: website | 20pts: hours listed (give full 20pts if ANY hours appear — Google only shows current day by default)
-Review Profile — 50pts: rating (4.5+=50, 4.0+=38, 3.5+=25, >0=10) | 30pts: review count (100+=30, 50+=22, 20+=15, 5+=8) | 20pts: owner responds to reviews
+Review Profile — 60pts: rating (4.5+=60, 4.0+=45, 3.5+=30, >0=12) | 40pts: review count (100+=40, 50+=30, 20+=18, 5+=8)
 Engagement — 50pts: photo count (50+=50, 20+=35, 10+=22, 3+=12) | 30pts: posts/updates (4+=30, 2+=20, 1+=10) | 20pts: Q&A entries (5+=20, 1+=10)
 Profile Completeness — 15pts: description | 10pts: category | 10pts: attributes | 10pts: address/service area (give full 10pts if address OR service area found, or if neither — SABs legitimately hide address) | 10pts: phone | 10pts: website | 10pts: hours (give full 10pts if ANY hours appear) | 10pts: photos | 5pts: verified (plus code present)
 

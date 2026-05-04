@@ -8,7 +8,6 @@ export interface GMBRawData {
   hoursText: string;
   reviewsText: string;
   aboutText: string;
-  ownerResponds: boolean;
   scrapedAt: string;
 }
 
@@ -194,43 +193,6 @@ async function extractServiceArea(page: Page): Promise<string> {
   });
 }
 
-// Detect owner responses. Checks captured text first, then scrolls the
-// Google Maps side panel (which has its own scroll container) in passes
-// to lazy-load older reviews before scanning.
-async function detectOwnerResponds(page: Page, reviewsText: string): Promise<boolean> {
-  const pattern = /response from the owner|owner's response|replied by owner/i;
-
-  if (pattern.test(reviewsText)) return true;
-
-  // Scroll the side panel — Google Maps doesn't use window scroll for reviews
-  for (let pass = 0; pass < 4; pass++) {
-    try {
-      await page.evaluate(() => {
-        // Walk candidate containers and scroll the first one that is actually scrollable
-        const selectors = ['[role="main"]', '.m6QErb', '.bJzME', '.tAiQdd', '.DxyBCb', '.e07Vkf'];
-        for (const sel of selectors) {
-          const el = document.querySelector(sel) as HTMLElement | null;
-          if (el && el.scrollHeight > el.clientHeight + 50) {
-            el.scrollTop += 2500;
-            return;
-          }
-        }
-        window.scrollBy(0, 2500);
-      });
-      await new Promise(r => setTimeout(r, 1500));
-
-      const found = await page.evaluate(() =>
-        /response from the owner|owner's response|replied by owner/i.test(
-          (document.body as HTMLElement).innerText ?? ''
-        )
-      );
-      if (found) return true;
-    } catch {}
-  }
-
-  return false;
-}
-
 async function getPanelText(page: Page): Promise<string> {
   return page.evaluate(() => {
     const candidates = ['[role="main"]', '.m6QErb', '.bJzME', '.tAiQdd', '.PPCwl'];
@@ -310,7 +272,6 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
     const serviceArea = await extractServiceArea(page);
     const overviewText = await getPanelText(page);
     const reviewsText = await clickTabAndGetText(page, ['reviews']);
-    const ownerResponds = await detectOwnerResponds(page, reviewsText);
     const aboutText   = await clickTabAndGetText(page, ['about']);
 
     const fullOverview = serviceArea
@@ -325,7 +286,6 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
       hoursText,
       reviewsText,
       aboutText,
-      ownerResponds,
       scrapedAt: new Date().toISOString(),
     };
   } finally {
