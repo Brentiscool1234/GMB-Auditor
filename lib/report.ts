@@ -38,17 +38,17 @@ ${raw.aboutText ? raw.aboutText.substring(0, 2000) : '(empty)'}
 
 IMPORTANT NOTES FOR SCORING:
 - Use the RATING & REVIEW COUNT field above as the authoritative source for star rating and number of reviews. Do not guess low if a count is present there.
-- If no street address appears, check for "Service area:" text — treat a listed service area as the location field. Only flag address missing if neither is present.
-- Hours: if the weekly hours block shows only some days, note which days are missing from the profile (not from the scrape).
+- ADDRESS: If no street address is found, do NOT penalize or flag this as missing. Many businesses (especially service-area businesses) intentionally hide their physical address. Only note address/service area if "Service area:" text is explicitly present.
+- HOURS: Google Maps only exposes the current day's hours by default. If ANY hours data is present (even just one day), treat hours as LISTED and PRESENT — do not flag partial hours as a deficiency. Never say hours are "partial" or "missing days". Only flag hours as missing if absolutely no hours text was found at all.
 
 ---
 
 SCORING RUBRIC (score each 0–100 based strictly on what you can confirm from the data above):
 
-Basic Info — 20pts: business name | 20pts: address or service area | 20pts: phone | 20pts: website | 20pts: hours listed
+Basic Info — 20pts: business name | 20pts: address or service area (if neither present give 20pts anyway — many SABs hide address by design) | 20pts: phone | 20pts: website | 20pts: hours listed (give full 20pts if ANY hours appear — Google only shows current day by default)
 Review Profile — 50pts: rating (4.5+=50, 4.0+=38, 3.5+=25, >0=10) | 30pts: review count (100+=30, 50+=22, 20+=15, 5+=8) | 20pts: owner responds to reviews
 Engagement — 50pts: photo count (50+=50, 20+=35, 10+=22, 3+=12) | 30pts: posts/updates (4+=30, 2+=20, 1+=10) | 20pts: Q&A entries (5+=20, 1+=10)
-Profile Completeness — 15pts: description | 10pts: category | 10pts: attributes | 10pts: address/service area | 10pts: phone | 10pts: website | 10pts: hours | 10pts: photos | 5pts: verified (plus code present)
+Profile Completeness — 15pts: description | 10pts: category | 10pts: attributes | 10pts: address/service area (give full 10pts if address OR service area found, or if neither — SABs legitimately hide address) | 10pts: phone | 10pts: website | 10pts: hours (give full 10pts if ANY hours appear) | 10pts: photos | 5pts: verified (plus code present)
 
 Overall = average of the 4 category scores, rounded to nearest integer.
 

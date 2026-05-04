@@ -206,7 +206,10 @@ export async function scrapeGMB(url: string): Promise<GMBRawData> {
       ],
     });
 
+    const context = browser.defaultBrowserContext();
+    await context.overridePermissions('https://www.google.com', ['geolocation']);
     const page = await browser.newPage();
+    await page.setGeolocation({ latitude: 37.0902, longitude: -95.7129, accuracy: 100 });
     await page.setViewport({ width: 1440, height: 900 });
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
